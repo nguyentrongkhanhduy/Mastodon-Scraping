@@ -8,10 +8,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from mastodon.errors import MastodonError
 
+from .analyzer import analyze
 from .client import build_profile
 from .formatter import format_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MAX_POSTS = 200
+DEFAULT_POSTS = 20
+DEFAULT_ANALYSIS_POSTS = 100
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,9 +34,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--posts",
         type=int,
-        default=20,
+        default=None,
         metavar="N",
-        help="Number of recent public posts to retrieve (1-40, default: 20).",
+        help=(
+            "Number of recent public posts to retrieve "
+            f"(1-{MAX_POSTS}, default: {DEFAULT_ANALYSIS_POSTS} with --analyze, "
+            f"otherwise {DEFAULT_POSTS})."
+        ),
+    )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Compute and display behavioral analysis metrics.",
     )
     parser.add_argument(
         "--exclude-replies",
@@ -69,18 +82,23 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    if args.posts < 1 or args.posts > 40:
-        parser.error("--posts must be between 1 and 40.")
+    post_limit = args.posts
+    if post_limit is None:
+        post_limit = DEFAULT_ANALYSIS_POSTS if args.analyze else DEFAULT_POSTS
+
+    if post_limit < 1 or post_limit > MAX_POSTS:
+        parser.error(f"--posts must be between 1 and {MAX_POSTS}.")
 
     try:
         profile = build_profile(
             acct=args.acct,
             instance=args.instance,
-            post_limit=args.posts,
+            post_limit=post_limit,
             exclude_replies=args.exclude_replies,
             exclude_reblogs=args.exclude_reblogs,
             access_token=args.token,
         )
+        analysis = analyze(profile.posts) if args.analyze else None
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
@@ -88,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"API error: {exc}", file=sys.stderr)
         return 1
 
-    print(format_profile(profile, args.output), end="")
+    print(format_profile(profile, args.output, analysis=analysis), end="")
     return 0
 
 
