@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 from mastodon import Mastodon
 
+API_PAGE_SIZE = 40
+
 
 @dataclass
 class PostMetadata:
@@ -24,17 +26,48 @@ class PostMetadata:
     favourites_count: int
     media_count: int
     tags: list[str]
+    mentions: list[str]
     is_reply: bool
     is_reblog: bool
+
+    @property
+    def engagement_score(self) -> int:
+        return self.replies_count + self.reblogs_count + self.favourites_count
 
     @classmethod
     def from_status(cls, status: dict[str, Any]) -> PostMetadata:
         reblog = status.get("reblog")
         if reblog:
-            return cls.from_status(reblog)._as_reblog()
+            inner = cls._from_status_content(reblog)
+            return cls(
+                id=inner.id,
+                url=inner.url,
+                created_at=_stringify(status.get("created_at", "")),
+                content=inner.content,
+                visibility=inner.visibility,
+                language=inner.language,
+                sensitive=inner.sensitive,
+                spoiler_text=inner.spoiler_text,
+                replies_count=inner.replies_count,
+                reblogs_count=inner.reblogs_count,
+                favourites_count=inner.favourites_count,
+                media_count=inner.media_count,
+                tags=inner.tags,
+                mentions=inner.mentions,
+                is_reply=False,
+                is_reblog=True,
+            )
+        return cls._from_status_content(status)
 
+    @classmethod
+    def _from_status_content(cls, status: dict[str, Any]) -> PostMetadata:
         content = _strip_html(status.get("content", ""))
         tags = [tag.get("name", "") for tag in status.get("tags", []) if tag.get("name")]
+        mentions = [
+            mention.get("acct") or mention.get("username", "")
+            for mention in status.get("mentions", [])
+            if mention.get("acct") or mention.get("username")
+        ]
 
         return cls(
             id=str(status.get("id", "")),
@@ -50,27 +83,9 @@ class PostMetadata:
             favourites_count=int(status.get("favourites_count", 0)),
             media_count=len(status.get("media_attachments") or []),
             tags=tags,
+            mentions=mentions,
             is_reply=status.get("in_reply_to_id") is not None,
             is_reblog=False,
-        )
-
-    def _as_reblog(self) -> PostMetadata:
-        return PostMetadata(
-            id=self.id,
-            url=self.url,
-            created_at=self.created_at,
-            content=self.content,
-            visibility=self.visibility,
-            language=self.language,
-            sensitive=self.sensitive,
-            spoiler_text=self.spoiler_text,
-            replies_count=self.replies_count,
-            reblogs_count=self.reblogs_count,
-            favourites_count=self.favourites_count,
-            media_count=self.media_count,
-            tags=self.tags,
-            is_reply=self.is_reply,
-            is_reblog=True,
         )
 
 
@@ -100,27 +115,30 @@ class UserProfile:
             "followers_count": self.followers_count,
             "following_count": self.following_count,
             "statuses_count": self.statuses_count,
-            "posts": [
-                {
-                    "id": post.id,
-                    "url": post.url,
-                    "created_at": post.created_at,
-                    "content": post.content,
-                    "visibility": post.visibility,
-                    "language": post.language,
-                    "sensitive": post.sensitive,
-                    "spoiler_text": post.spoiler_text,
-                    "replies_count": post.replies_count,
-                    "reblogs_count": post.reblogs_count,
-                    "favourites_count": post.favourites_count,
-                    "media_count": post.media_count,
-                    "tags": post.tags,
-                    "is_reply": post.is_reply,
-                    "is_reblog": post.is_reblog,
-                }
-                for post in self.posts
-            ],
+            "posts": [_post_to_dict(post) for post in self.posts],
         }
+
+
+def _post_to_dict(post: PostMetadata) -> dict[str, Any]:
+    return {
+        "id": post.id,
+        "url": post.url,
+        "created_at": post.created_at,
+        "content": post.content,
+        "visibility": post.visibility,
+        "language": post.language,
+        "sensitive": post.sensitive,
+        "spoiler_text": post.spoiler_text,
+        "replies_count": post.replies_count,
+        "reblogs_count": post.reblogs_count,
+        "favourites_count": post.favourites_count,
+        "media_count": post.media_count,
+        "tags": post.tags,
+        "mentions": post.mentions,
+        "is_reply": post.is_reply,
+        "is_reblog": post.is_reblog,
+        "engagement_score": post.engagement_score,
+    }
 
 
 def parse_acct(acct: str, instance: str | None = None) -> tuple[str, str]:
@@ -179,6 +197,41 @@ def create_mastodon_client(base_url: str, access_token: str | None = None) -> Ma
     return Mastodon(**kwargs)
 
 
+def fetch_account_statuses(
+    client: Mastodon,
+    account_id: str,
+    limit: int,
+    exclude_replies: bool = False,
+    exclude_reblogs: bool = False,
+) -> list[PostMetadata]:
+    """Fetch recent statuses, paginating when limit exceeds the API page size."""
+    limit = max(limit, 1)
+    posts: list[PostMetadata] = []
+    max_id: str | None = None
+
+    while len(posts) < limit:
+        batch_limit = min(API_PAGE_SIZE, limit - len(posts))
+        kwargs: dict[str, Any] = {
+            "limit": batch_limit,
+            "exclude_replies": exclude_replies,
+            "exclude_reblogs": exclude_reblogs,
+        }
+        if max_id is not None:
+            kwargs["max_id"] = max_id
+
+        statuses = client.account_statuses(account_id, **kwargs)
+        if not statuses:
+            break
+
+        posts.extend(PostMetadata.from_status(status) for status in statuses)
+        max_id = str(statuses[-1]["id"])
+
+        if len(statuses) < batch_limit:
+            break
+
+    return posts[:limit]
+
+
 def build_profile(
     acct: str,
     instance: str | None = None,
@@ -191,15 +244,15 @@ def build_profile(
     client = create_mastodon_client(base_url, access_token=access_token)
 
     account = client.account_lookup(acct)
-    statuses = client.account_statuses(
+    posts = fetch_account_statuses(
+        client,
         account["id"],
-        limit=min(max(post_limit, 1), 40),
+        limit=post_limit,
         exclude_replies=exclude_replies,
         exclude_reblogs=exclude_reblogs,
     )
 
     biography = _strip_html(account.get("note", ""))
-    posts = [PostMetadata.from_status(status) for status in statuses]
 
     return UserProfile(
         username=account.get("username", ""),
