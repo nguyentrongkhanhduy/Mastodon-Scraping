@@ -4,9 +4,6 @@ import json
 from typing import Any
 
 from .analyzer import BehaviorAnalysis, format_account_age
-from .client import PostMetadata, UserProfile, format_account_handle
-
-
 from .client import PostMetadata, UserProfile, format_account_handle, split_account_handle
 
 
@@ -135,8 +132,7 @@ def _format_analysis(analysis: BehaviorAnalysis) -> list[str]:
             "-" * 60,
         ]
     )
-    # lines.extend(_format_bar_chart(analysis.activity_by_day, label_width=9))
-    lines.extend(_format_count_list(analysis.activity_by_day))
+    lines.extend(_format_bar_chart(analysis.activity_by_day, label_width=9))
     lines.extend(
         [
             "",
@@ -145,9 +141,11 @@ def _format_analysis(analysis: BehaviorAnalysis) -> list[str]:
             f"  Peak hours: {analysis.peak_hours}",
         ]
     )
-    # lines.extend(_format_bar_chart([(f"{hour:02d}:00", count) for hour, count in analysis.activity_by_hour], label_width=5))
     lines.extend(
-        _format_count_list([(f"{hour:02d}:00", count) for hour, count in analysis.activity_by_hour])
+        _format_bar_chart(
+            [(f"{hour:02d}:00", count) for hour, count in analysis.activity_by_hour],
+            label_width=5,
+        )
     )
     lines.extend(
         [
@@ -210,42 +208,30 @@ def _format_content_mix(analysis: BehaviorAnalysis) -> list[str]:
     for key in ("original", "reply", "reblog"):
         count = analysis.content_mix.get(key, 0)
         percent = count / analysis.sample_size * 100
-        # bar = _bar(count, analysis.sample_size, width=18)
-        lines.append(f"  {labels[key]:<9} {percent:5.1f}% ({count:>3})")
+        bar = _bar(count, analysis.sample_size, width=18)
+        lines.append(f"  {labels[key]:<9} {percent:5.1f}% ({count:>3})  {bar}")
     return lines
 
 
-def _format_count_list(items: list[tuple[Any, int]]) -> list[str]:
+def _format_bar_chart(items: list[tuple[Any, int]], label_width: int) -> list[str]:
     if not items:
         return ["  (no data)"]
 
+    max_count = max(count for _, count in items) or 1
     lines: list[str] = []
     for label, count in items:
-        if count == 0:
+        if count == 0 and max_count > 0:
             continue
-        lines.append(f"  {label}: {count}")
+        bar = _bar(count, max_count, width=24)
+        lines.append(f"  {str(label):<{label_width}} {count:>3}  {bar}")
     return lines or ["  (no activity recorded)"]
 
 
-# def _format_bar_chart(items: list[tuple[Any, int]], label_width: int) -> list[str]:
-#     if not items:
-#         return ["  (no data)"]
-#
-#     max_count = max(count for _, count in items) or 1
-#     lines: list[str] = []
-#     for label, count in items:
-#         if count == 0 and max_count > 0:
-#             continue
-#         bar = _bar(count, max_count, width=24)
-#         lines.append(f"  {str(label):<{label_width}} {count:>3}  {bar}")
-#     return lines or ["  (no activity recorded)"]
-#
-#
-# def _bar(value: int, maximum: int, width: int) -> str:
-#     if maximum <= 0:
-#         return ""
-#     filled = max(1, round(value / maximum * width)) if value > 0 else 0
-#     return "█" * filled
+def _bar(value: int, maximum: int, width: int) -> str:
+    if maximum <= 0:
+        return ""
+    filled = max(1, round(value / maximum * width)) if value > 0 else 0
+    return "█" * filled
 
 
 def _format_ranked_list(items: list[tuple[str, int]], prefix: str) -> list[str]:
