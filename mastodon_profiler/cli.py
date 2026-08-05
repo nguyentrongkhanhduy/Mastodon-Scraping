@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from mastodon.errors import MastodonError
 
 from .analyzer import analyze
-from .client import build_profile
-from .formatter import format_profile
+from .client import build_profile, search_accounts
+from .formatter import format_profile, format_search_results
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAX_POSTS = 200
@@ -58,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude reblogs/boosts from the recent post list.",
     )
     parser.add_argument(
+        "--search",
+        action="store_true",
+        help=(
+            "Search for matching accounts and list handles. "
+            "Without --instance or user@instance, searches across the Fediverse."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Disable account_search fallback when exact lookup fails.",
@@ -86,6 +94,36 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    if args.search and args.analyze:
+        parser.error("--search cannot be used with --analyze.")
+
+    if args.search:
+        try:
+            query, scoped_instance, hub_instance, results = search_accounts(
+                query=args.acct,
+                instance=args.instance,
+                access_token=args.token,
+                search_instance=os.environ.get("MASTODON_SEARCH_INSTANCE"),
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        except MastodonError as exc:
+            print(f"API error: {exc}", file=sys.stderr)
+            return 1
+
+        print(
+            format_search_results(
+                results,
+                query=query,
+                scoped_instance=scoped_instance,
+                hub_instance=hub_instance,
+                output_format=args.output,
+            ),
+            end="",
+        )
+        return 0
 
     post_limit = args.posts
     if post_limit is None:

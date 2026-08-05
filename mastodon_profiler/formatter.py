@@ -4,7 +4,62 @@ import json
 from typing import Any
 
 from .analyzer import BehaviorAnalysis, format_account_age
-from .client import PostMetadata, UserProfile
+from .client import PostMetadata, UserProfile, format_account_handle
+
+
+from .client import PostMetadata, UserProfile, format_account_handle, split_account_handle
+
+
+def format_search_results(
+    results: list[dict[str, Any]],
+    query: str,
+    scoped_instance: str | None,
+    hub_instance: str,
+    output_format: str,
+) -> str:
+    fallback_instance = scoped_instance or hub_instance
+
+    if output_format == "json":
+        matches = []
+        for account in results:
+            username, instance = split_account_handle(account, fallback_instance)
+            matches.append(
+                {
+                    "username": username,
+                    "instance": instance,
+                    "acct": format_account_handle(account, fallback_instance),
+                    "display_name": account.get("display_name", ""),
+                    "url": account.get("url", ""),
+                }
+            )
+        payload = {
+            "query": query,
+            "scoped_instance": scoped_instance,
+            "search_hub": hub_instance,
+            "match_count": len(results),
+            "matches": matches,
+        }
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    scope = scoped_instance or "all instances"
+    lines = [
+        f"Account search — '{query}' ({scope})",
+        "=" * 60,
+    ]
+    if not results:
+        lines.append("(no matches found)")
+        return "\n".join(lines).rstrip() + "\n"
+
+    lines.append(f"Found {len(results)} match(es):")
+    lines.append("-" * 60)
+    for index, account in enumerate(results, start=1):
+        username, instance = split_account_handle(account, fallback_instance)
+        handle = f"{username}@{instance}" if instance else username
+        display_name = account.get("display_name", "") or "(no display name)"
+        lines.append(f"  {index}. {handle} — {display_name}")
+    lines.append("")
+    lines.append("Use a full handle to profile: python3 -m mastodon_profiler user@instance --analyze")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def format_profile(

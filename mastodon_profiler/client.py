@@ -10,6 +10,8 @@ from mastodon import Mastodon
 from mastodon.errors import MastodonNotFoundError
 
 API_PAGE_SIZE = 40
+DEFAULT_SEARCH_LIMIT = 20
+DEFAULT_SEARCH_INSTANCE = "mastodon.social"
 
 
 @dataclass
@@ -198,9 +200,86 @@ def create_mastodon_client(base_url: str, access_token: str | None = None) -> Ma
     return Mastodon(**kwargs)
 
 
+def parse_search_input(
+    query: str,
+    instance: str | None = None,
+    search_instance: str | None = None,
+) -> tuple[str, str | None, str]:
+    """Return (username query, optional instance domain filter, API base URL)."""
+    query = query.strip().lstrip("@")
+    if "@" in query:
+        username, domain = query.rsplit("@", 1)
+        return username, domain.lower(), _normalize_instance_url(domain)
+
+    if instance:
+        domain = _hostname_from_instance(instance).lower()
+        return query, domain, _normalize_instance_url(instance)
+
+    hub = search_instance or DEFAULT_SEARCH_INSTANCE
+    return query, None, _normalize_instance_url(hub)
+
+
+def _account_on_instance(account: dict[str, Any], instance_domain: str) -> bool:
+    """Return True when an account belongs to the specified instance."""
+    account_acct = account.get("acct", "")
+    domain = instance_domain.lower().removeprefix("www.")
+    if "@" not in account_acct:
+        return True
+    account_domain = account_acct.rsplit("@", 1)[1].lower().removeprefix("www.")
+    return account_domain == domain
+
+
+def format_account_handle(account: dict[str, Any], fallback_instance: str = "") -> str:
+    """Return a full user@instance handle for display."""
+    username, instance = split_account_handle(account, fallback_instance)
+    if instance:
+        return f"{username}@{instance}"
+    return username
+
+
+def split_account_handle(
+    account: dict[str, Any],
+    fallback_instance: str = "",
+) -> tuple[str, str]:
+    """Return (username, instance domain) for an account."""
+    acct = account.get("acct", "") or account.get("username", "")
+    if "@" in acct:
+        username, instance = acct.rsplit("@", 1)
+        return username, instance
+    if fallback_instance:
+        return acct, fallback_instance
+    return acct, ""
+
+
+def search_accounts(
+    query: str,
+    instance: str | None = None,
+    access_token: str | None = None,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    search_instance: str | None = None,
+) -> tuple[str, str | None, str, list[dict[str, Any]]]:
+    """Search for accounts. Returns (query, scoped instance, search hub, results)."""
+    username, instance_domain, base_url = parse_search_input(
+        query,
+        instance=instance,
+        search_instance=search_instance,
+    )
+    hub_instance = _hostname_from_instance(base_url)
+    client = create_mastodon_client(base_url, access_token=access_token)
+
+    if instance_domain:
+        results = client.account_search(username, limit=limit, resolve=False)
+        results = [account for account in results if _account_on_instance(account, instance_domain)]
+    else:
+        results = list(client.account_search(username, limit=limit, resolve=True))
+
+    return username, instance_domain, hub_instance, results
+
+
 def resolve_account(
     client: Mastodon,
     acct: str,
+    hub_instance: str,
     search_limit: int = 5,
     search_fallback: bool = True,
 ) -> dict[str, Any]:
@@ -219,7 +298,8 @@ def resolve_account(
     exact_matches = [
         account
         for account in results
-        if account.get("acct", "").lower() == acct.lower()
+        if format_account_handle(account, hub_instance).lower() == acct.lower()
+        or account.get("username", "").lower() == query.lower()
     ]
     if len(exact_matches) == 1:
         return exact_matches[0]
@@ -228,8 +308,9 @@ def resolve_account(
 
     lines = [f"Multiple matches for '{query}':"]
     for index, account in enumerate(results, start=1):
+        handle = format_account_handle(account, hub_instance)
         display_name = account.get("display_name", "") or "(no display name)"
-        lines.append(f"  {index}. @{account.get('acct')} — {display_name}")
+        lines.append(f"  {index}. {handle} — {display_name}")
     lines.append("Pass the full handle, e.g. user@instance.social")
     raise ValueError("\n".join(lines))
 
@@ -279,9 +360,15 @@ def build_profile(
     search_fallback: bool = True,
 ) -> UserProfile:
     acct, base_url = parse_acct(acct, instance)
+    hub_instance = _hostname_from_instance(base_url)
     client = create_mastodon_client(base_url, access_token=access_token)
 
-    account = resolve_account(client, acct, search_fallback=search_fallback)
+    account = resolve_account(
+        client,
+        acct,
+        hub_instance=hub_instance,
+        search_fallback=search_fallback,
+    )
     posts = fetch_account_statuses(
         client,
         account["id"],
