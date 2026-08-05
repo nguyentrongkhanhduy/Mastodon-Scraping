@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "acct",
-        help="Mastodon account in user@instance form (leading @ optional).",
+        help="Mastodon account in user@instance form, or username with --instance.",
     )
     parser.add_argument(
         "--instance",
@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude-reblogs",
         action="store_true",
         help="Exclude reblogs/boosts from the recent post list.",
+    )
+    parser.add_argument(
+        "--no-search-fallback",
+        action="store_true",
+        help="Disable account_search fallback when exact lookup fails.",
     )
     parser.add_argument(
         "--token",
@@ -97,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             exclude_replies=args.exclude_replies,
             exclude_reblogs=args.exclude_reblogs,
             access_token=args.token,
+            search_fallback=not args.no_search_fallback,
         )
         analysis = analyze(profile.posts) if args.analyze else None
     except ValueError as exc:

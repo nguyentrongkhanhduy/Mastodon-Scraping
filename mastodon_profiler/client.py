@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from mastodon import Mastodon
+from mastodon.errors import MastodonNotFoundError
 
 API_PAGE_SIZE = 40
 
@@ -197,6 +198,42 @@ def create_mastodon_client(base_url: str, access_token: str | None = None) -> Ma
     return Mastodon(**kwargs)
 
 
+def resolve_account(
+    client: Mastodon,
+    acct: str,
+    search_limit: int = 5,
+    search_fallback: bool = True,
+) -> dict[str, Any]:
+    """Look up an account by exact handle, optionally falling back to account_search."""
+    try:
+        return client.account_lookup(acct)
+    except MastodonNotFoundError:
+        if not search_fallback:
+            raise ValueError(f"No account found for '{acct}'.")
+
+    query = acct.split("@", 1)[0]
+    results = client.account_search(query, limit=search_limit, resolve=True)
+    if not results:
+        raise ValueError(f"No account found matching '{acct}'.")
+
+    exact_matches = [
+        account
+        for account in results
+        if account.get("acct", "").lower() == acct.lower()
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(results) == 1:
+        return results[0]
+
+    lines = [f"Multiple matches for '{query}':"]
+    for index, account in enumerate(results, start=1):
+        display_name = account.get("display_name", "") or "(no display name)"
+        lines.append(f"  {index}. @{account.get('acct')} — {display_name}")
+    lines.append("Pass the full handle, e.g. user@instance.social")
+    raise ValueError("\n".join(lines))
+
+
 def fetch_account_statuses(
     client: Mastodon,
     account_id: str,
@@ -239,11 +276,12 @@ def build_profile(
     exclude_replies: bool = False,
     exclude_reblogs: bool = False,
     access_token: str | None = None,
+    search_fallback: bool = True,
 ) -> UserProfile:
     acct, base_url = parse_acct(acct, instance)
     client = create_mastodon_client(base_url, access_token=access_token)
 
-    account = client.account_lookup(acct)
+    account = resolve_account(client, acct, search_fallback=search_fallback)
     posts = fetch_account_statuses(
         client,
         account["id"],
