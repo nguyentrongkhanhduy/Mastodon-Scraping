@@ -9,7 +9,12 @@ from dotenv import load_dotenv
 from mastodon.errors import MastodonError
 
 from .analyzer import analyze
-from .client import build_profile, search_accounts
+from .client import (
+    DEFAULT_SEARCH_LIMIT,
+    MAX_SEARCH_LIMIT,
+    build_profile,
+    search_accounts,
+)
 from .formatter import format_profile, format_search_results
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum number of account search results to return with --search "
+            f"(1-{MAX_SEARCH_LIMIT}, default: {DEFAULT_SEARCH_LIMIT})."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Disable account_search fallback when exact lookup fails.",
@@ -98,12 +113,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.search and args.analyze:
         parser.error("--search cannot be used with --analyze.")
 
+    if args.limit is not None and not args.search:
+        parser.error("--limit can only be used with --search.")
+
     if args.search:
+        search_limit = args.limit if args.limit is not None else DEFAULT_SEARCH_LIMIT
+        if search_limit < 1 or search_limit > MAX_SEARCH_LIMIT:
+            parser.error(f"--limit must be between 1 and {MAX_SEARCH_LIMIT}.")
+
         try:
             query, scoped_instance, hub_instance, results = search_accounts(
                 query=args.acct,
                 instance=args.instance,
                 access_token=args.token,
+                limit=search_limit,
                 search_instance=os.environ.get("MASTODON_SEARCH_INSTANCE"),
             )
         except ValueError as exc:

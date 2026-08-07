@@ -10,7 +10,8 @@ from mastodon import Mastodon
 from mastodon.errors import MastodonNotFoundError
 
 API_PAGE_SIZE = 40
-DEFAULT_SEARCH_LIMIT = 20
+DEFAULT_SEARCH_LIMIT = 10
+MAX_SEARCH_LIMIT = 80
 DEFAULT_SEARCH_INSTANCE = "mastodon.social"
 
 
